@@ -1,9 +1,9 @@
 # VarScan2 Somatic Variant and CNV Analysis Pipeline
 
-A single-script Bash pipeline for tumour/normal paired somatic variant calling
-(SNP, INDEL, Germline, LOH) and copy number variation (CNV) analysis using
-VarScan2, samtools, bam-readcount, and fpfilter. Designed for whole exome
-sequencing (WES) with full WGS compatibility.
+Paired case/control somatic variant calling (SNP, INDEL, Germline, LOH) and
+copy number variation (CNV) analysis using VarScan2, samtools, bam-readcount,
+and fpfilter. Implemented as a single-binary Rust pipeline. Designed for whole
+exome sequencing (WES) with full WGS compatibility.
 
 ---
 
@@ -29,6 +29,8 @@ sequencing (WES) with full WGS compatibility.
 - [Key Design Decisions](#key-design-decisions)
 - [Post-Pipeline Analysis](#post-pipeline-analysis)
 - [Troubleshooting](#troubleshooting)
+- [FAQ](#faq)
+- [License](#license)
 
 ---
 
@@ -1141,4 +1143,9 @@ is no dependency on the Linux-only `sha256sum` utility. Install Rust via
 No. The pipeline only requires a writable working directory. Install samtools
 and bam-readcount into a user-local prefix (e.g. `~/local/bin`) and add it to
 `$PATH`.
-# varscan2-bam-to-vcf
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).

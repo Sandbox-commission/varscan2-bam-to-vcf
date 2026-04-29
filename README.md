@@ -11,6 +11,7 @@ exome sequencing (WES) with full WGS compatibility.
 
 - [Overview](#overview)
 - [Pipeline Stages](#pipeline-stages)
+- [Setup Guide](#setup-guide)
 - [Prerequisites](#prerequisites)
 - [Directory Structure](#directory-structure)
 - [Input File Format](#input-file-format)
@@ -88,6 +89,105 @@ BAM files
 | 8 | `bam-readcount` | `.var` files + BAMs | `readcount/*.readcount` |
 | 9 | `fpfilter.pl` | readcounts + VCFs | `filtered/*.fpfilter.vcf` |
 | 10 | — | all outputs | `varscan_pipeline_summary.txt` |
+
+---
+
+## Setup Guide
+
+Complete setup from a fresh clone to a working binary. Follow steps in order.
+
+### Step 1 — Install system dependencies
+
+| Tool | Min version | Install |
+|------|-------------|---------|
+| Rust + cargo | 1.70 | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| Java JRE | 8 | `sudo apt install default-jre` (Debian/Ubuntu) |
+| samtools | 1.13 | `sudo apt install samtools` or build from source |
+| bam-readcount | 0.8 | build from source — see [bam-readcount releases](https://github.com/genome/bam-readcount/releases) |
+| Perl | 5.10 | pre-installed on most Linux systems |
+
+Verify tools are on `PATH`:
+
+```bash
+java -version
+samtools --version | head -1
+bam-readcount 2>&1 | head -1
+perl --version | head -1
+```
+
+### Step 2 — Clone the repository
+
+```bash
+git clone https://github.com/<you>/varscan2-bam-to-vcf.git
+cd varscan2-bam-to-vcf
+```
+
+### Step 3 — Set the reference FASTA path
+
+Edit the `GENOMEIDX1` constant at the top of `varscan2_pipeline.rs`:
+
+```rust
+const GENOMEIDX1: &str = "/data/ref/Homo_sapiens.GRCh38.dna.toplevel.fna";
+```
+
+The FASTA must be indexed (`samtools faidx`) and chromosome naming must match
+your BAMs (Ensembl: `1,2,...,MT` vs UCSC: `chr1,chr2,...,chrM`).
+
+### Step 4 — Build the binary
+
+```bash
+cargo build --release
+# Binary: target/release/varscan2_pipeline
+```
+
+### Step 5 — Obtain VarScan2 and fpfilter.pl
+
+```bash
+wget -O software/VarScan.v2.3.9.jar \
+  https://github.com/dkoboldt/varscan/releases/download/2.3.9/VarScan.v2.3.9.jar
+
+wget -O scripts/fpfilter.pl \
+  https://raw.githubusercontent.com/genome/fpfilter-tool/master/fpfilter.pl
+chmod +x scripts/fpfilter.pl
+```
+
+### Step 6 — Create your sample pairs file
+
+Copy the example and edit it:
+
+```bash
+cp sample_pairs.csv.example sample_pairs.csv
+```
+
+Format: `case_bam,control_bam` — one pair per line, no header, filenames
+relative to the working directory:
+
+```
+case01_final.bam,control01_final.bam
+case02_final.bam,control02_final.bam
+```
+
+### Step 7 — Place BAM files and verify indexes
+
+All BAM files must be coordinate-sorted, duplicate-marked, and indexed:
+
+```bash
+ls *.bam | xargs -I{} samtools index {}
+```
+
+### Step 8 — Run
+
+```bash
+./target/release/varscan2_pipeline
+```
+
+Dry-run first to confirm all stages would execute without errors:
+
+```bash
+./target/release/varscan2_pipeline --dry-run
+```
+
+See [Usage](#usage) for stage-range and resume options.
 
 ---
 

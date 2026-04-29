@@ -36,6 +36,9 @@ varscan_review_prompt.md
 /.claude/
 /.agent/
 
+# Obsidian vault config
+/.obsidian/
+
 # graphify knowledge graph output
 /graphify-out/
 

@@ -196,12 +196,11 @@ The BAM file is then located as `$BAM_DIR/<sample_name>$BAM_SUFFIX`.
 **Incomplete pairs** (empty normal field) are automatically skipped with a
 warning. Verify all pairs before running; do not omit unpaired tumour-only samples.
 
-### Current cohort — `sample_pairs.csv` (CRC cohort, `_final.bam` BAMs)
+### Example A — typical `sample_pairs.csv`
 
 ```
-50T_CRC_final.bam,50N_CRC_final.bam
-91T_CRC_final.bam,91N_CRC_final.bam
-...
+case01_final.bam,control01_final.bam
+case02_final.bam,control02_final.bam
 ```
 
 ```bash
@@ -211,8 +210,7 @@ BAM_SUFFIX="_final.bam"
 BAM_DIR="$PWD"
 ```
 
-> **Incomplete entries:** `19T_CRC_final.bam,` and `78T_CRC_final.bam,` have
-> no matched normal and will be skipped automatically with a WARNING message.
+> Samples with no matched control are skipped automatically with a WARNING message.
 
 ### Example B — pairs file lists flagstat filenames; BAMs are in a subdirectory
 

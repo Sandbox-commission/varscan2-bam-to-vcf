@@ -1,1 +1,7 @@
-tumour_sample_final.bam,normal_sample_final.bam
+# Format: case_bam,control_bam  (one pair per line, no header row)
+# Column 1: case (tumour) BAM filename
+# Column 2: control (normal) BAM filename
+# Filenames are relative to the working directory.
+# The pipeline strips BAM_SUFFIX (_final.bam) to derive sample names.
+case01_final.bam,control01_final.bam
+case02_final.bam,control02_final.bam

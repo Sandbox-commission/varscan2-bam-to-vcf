@@ -1238,7 +1238,7 @@ QUICK START
   1. Edit GENOMEIDX1 at the top of varscan2_pipeline.rs to point to your GRCh38
      reference FASTA, then rebuild: cargo build --release
   2. Populate sample_pairs.csv (tumour col 1, normal col 2):
-       50T_CRC_final.bam,50N_CRC_final.bam
+       case01_final.bam,control01_final.bam
   3. Place VarScan.v2.3.9.jar in software/ and fpfilter.pl in scripts/
      (see software/README.md and scripts/README.md)
   4. Run: ./target/release/varscan2_pipeline
@@ -1528,7 +1528,7 @@ mod tests {
 
     #[test]
     fn get_sample_name_strips_suffix() {
-        assert_eq!(get_sample_name("50T_CRC_final.bam"), "50T_CRC");
+        assert_eq!(get_sample_name("case01_final.bam"), "case01");
         assert_eq!(get_sample_name("sample_final.bam"), "sample");
     }
 

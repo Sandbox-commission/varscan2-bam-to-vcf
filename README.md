@@ -98,21 +98,43 @@ Complete setup from a fresh clone to a working binary. Follow steps in order.
 
 ### Step 1 — Install system dependencies
 
-| Tool | Min version | Install |
-|------|-------------|---------|
-| Rust + cargo | 1.70 | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
-| Java JRE | 8 | `sudo apt install default-jre` (Debian/Ubuntu) |
-| samtools | 1.13 | `sudo apt install samtools` or build from source |
-| bam-readcount | 0.8 | build from source — see [bam-readcount releases](https://github.com/genome/bam-readcount/releases) |
-| Perl | 5.10 | pre-installed on most Linux systems |
+**Recommended: use conda/mamba** — this installs the correct versions of all
+tools without requiring sudo or manual compilation:
 
-Verify tools are on `PATH`:
+```bash
+conda create -n varscan2 -c conda-forge -c bioconda \
+    samtools=1.20 bam-readcount java-jdk perl perl-statistics-descriptive
+conda activate varscan2
+```
+
+**Alternative: manual install (Debian/Ubuntu)**
+
+> `apt install samtools` ships samtools 1.10 on Ubuntu 20.04/22.04 — too old.
+> Use conda, or build samtools ≥ 1.13 from source.
+
+| Tool | Min version | Manual install |
+|------|-------------|----------------|
+| Java JRE | 8 | `sudo apt install default-jre` |
+| samtools | **1.13** | build from [samtools releases](https://github.com/samtools/samtools/releases) — do NOT use `apt` |
+| bam-readcount | 0.8 | `sudo apt install cmake libbam-dev && git clone https://github.com/genome/bam-readcount && cd bam-readcount && cmake -Wno-dev . && make && sudo cp bin/bam-readcount /usr/local/bin/` |
+| Perl | 5.10 | pre-installed on most Linux |
+| Statistics::Descriptive | any | `cpanm Statistics::Descriptive` (required by fpfilter.pl) |
+
+**Install Rust:**
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"   # add cargo to current shell — do not skip this
+```
+
+**Verify all tools before proceeding:**
 
 ```bash
 java -version
-samtools --version | head -1
+samtools --version | head -1    # must be ≥ 1.13
 bam-readcount 2>&1 | head -1
-perl --version | head -1
+perl -MStatistics::Descriptive -e 'print "ok\n"'  # must print "ok"
+cargo --version
 ```
 
 ### Step 2 — Clone the repository
@@ -122,22 +144,38 @@ git clone https://github.com/<you>/varscan2-bam-to-vcf.git
 cd varscan2-bam-to-vcf
 ```
 
-### Step 3 — Set the reference FASTA path
+### Step 3 — Obtain the reference FASTA
 
-Edit the `GENOMEIDX1` constant at the top of `varscan2_pipeline.rs`:
+The pipeline requires an indexed GRCh38 reference FASTA. If you do not already
+have one, download from Ensembl (Ensembl chromosome naming: `1,2,...,MT`):
 
-```rust
-const GENOMEIDX1: &str = "/data/ref/Homo_sapiens.GRCh38.dna.toplevel.fna";
+```bash
+wget https://ftp.ensembl.org/pub/release-112/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.toplevel.fa.gz
+gunzip Homo_sapiens.GRCh38.dna.toplevel.fa.gz
+samtools faidx Homo_sapiens.GRCh38.dna.toplevel.fa
 ```
 
-The FASTA must be indexed (`samtools faidx`) and chromosome naming must match
-your BAMs (Ensembl: `1,2,...,MT` vs UCSC: `chr1,chr2,...,chrM`).
+Note the absolute path — you will need it in Step 4.
 
-### Step 4 — Build the binary
+> **UCSC users:** if your BAMs use `chr1, chr2, ..., chrM` naming, use the
+> UCSC reference (`hg38.fa`) instead. Mismatched naming causes silent empty
+> output at Stage 3 — verify with:
+> `samtools view -H case01_final.bam | grep '^@SQ' | head -3`
+
+### Step 4 — Set the reference FASTA path and build
+
+Open `varscan2_pipeline.rs` in any text editor. On **line 11**, set
+`GENOMEIDX1` to the absolute path of your reference FASTA:
+
+```rust
+const GENOMEIDX1: &str = "/data/ref/Homo_sapiens.GRCh38.dna.toplevel.fa";
+```
+
+Then build the binary. **You must rebuild any time you change this constant:**
 
 ```bash
 cargo build --release
-# Binary: target/release/varscan2_pipeline
+ls -lh target/release/varscan2_pipeline   # confirm binary exists
 ```
 
 ### Step 5 — Obtain VarScan2 and fpfilter.pl
@@ -148,44 +186,68 @@ wget -O software/VarScan.v2.3.9.jar \
 
 wget -O scripts/fpfilter.pl \
   https://raw.githubusercontent.com/genome/fpfilter-tool/master/fpfilter.pl
-chmod +x scripts/fpfilter.pl
+```
+
+Verify the VarScan jar (expected SHA256 in `software/README.md`):
+
+```bash
+sha256sum software/VarScan.v2.3.9.jar
 ```
 
 ### Step 6 — Create your sample pairs file
-
-Copy the example and edit it:
 
 ```bash
 cp sample_pairs.csv.example sample_pairs.csv
 ```
 
-Format: `case_bam,control_bam` — one pair per line, no header, filenames
-relative to the working directory:
+Edit `sample_pairs.csv`: one pair per line, case BAM first, control BAM
+second, filenames relative to the **directory you will run the pipeline from**:
 
 ```
 case01_final.bam,control01_final.bam
 case02_final.bam,control02_final.bam
 ```
 
-### Step 7 — Place BAM files and verify indexes
+### Step 7 — Verify BAM files
 
-All BAM files must be coordinate-sorted, duplicate-marked, and indexed:
+Place all BAM files in the working directory. They must be coordinate-sorted,
+duplicate-marked, and indexed.
+
+**Check sort order** (must be `coordinate`):
 
 ```bash
-ls *.bam | xargs -I{} samtools index {}
+samtools view -H case01_final.bam | grep '^@HD'
+```
+
+**Index all BAMs** (skip if `.bai` files already exist):
+
+```bash
+find . -maxdepth 1 -name "*.bam" -exec samtools index {} \;
+```
+
+**Check duplicate marking** — `PERCENT_DUPLICATION` should be present in read
+group headers or you should have run Picard `MarkDuplicates` before this step:
+
+```bash
+samtools view -H case01_final.bam | grep '^@RG'
 ```
 
 ### Step 8 — Run
 
-```bash
-./target/release/varscan2_pipeline
-```
-
-Dry-run first to confirm all stages would execute without errors:
+Dry-run first — confirms all prerequisites are found without executing anything:
 
 ```bash
 ./target/release/varscan2_pipeline --dry-run
 ```
+
+Then run the full pipeline (log to file recommended):
+
+```bash
+./target/release/varscan2_pipeline 2>&1 | tee varscan_run.log
+```
+
+Expected runtime: 2–8 hours per pair depending on genome coverage and
+available CPU cores (Stage 2 mpileup is the bottleneck).
 
 See [Usage](#usage) for stage-range and resume options.
 

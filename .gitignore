@@ -1,0 +1,43 @@
+# Editor artifacts
+*.swp
+*.swo
+*~
+
+# Backup files
+*.bak
+
+# Rust build artifacts
+/target/
+
+# Compiled Rust binary (also covered by /target/ above, kept for clarity)
+varscan2_pipeline
+
+# Pipeline output directories
+/flagstats/
+/mpileup/
+/somatic/
+/copynumber/
+/snp-VAR/
+/indel-VAR/
+/readcount/
+/filtered/
+
+# Pipeline state and logs
+/.resume_state/
+varscan_pipeline_summary.txt
+
+# Sample pairs — commit sample_pairs.csv.example, not actual sample lists
+/sample_pairs.csv
+
+# Internal review and planning documents
+varscan_review_prompt.md
+
+# Claude Code and agent project directories
+/.claude/
+/.agent/
+
+# graphify knowledge graph output
+/graphify-out/
+
+# macOS
+.DS_Store

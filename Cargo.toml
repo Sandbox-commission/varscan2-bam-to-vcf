@@ -1,0 +1,17 @@
+[package]
+name = "varscan2-pipeline"
+version = "0.1.0"
+edition = "2021"
+description = "VarScan2 somatic variant and CNV pipeline (Rust)"
+license = "MIT"
+
+[[bin]]
+name = "varscan2_pipeline"
+path = "varscan2_pipeline.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[dependencies]
+sha2 = "0.10"

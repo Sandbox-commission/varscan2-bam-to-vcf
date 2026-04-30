@@ -607,6 +607,12 @@ fn generate_mpileup(paths: &Paths) -> AppResult<()> {
         let out = paths.mpileup_dir.join(format!("{}_{}.mpileup", samplen, samplet));
         log_message(&format!("Mpileup: Normal={}  Tumour={}", samplen, samplet));
 
+        // -B: disables BAQ to avoid over-penalising reads at WES capture boundaries;
+        //     increases INDEL FP rate slightly — remove for strict WGS variant calling.
+        // -q BRC_MAP_QUAL (10): more conservative than VarScan manual's -q 1; excludes
+        //     low-confidence multi-mapped reads (MAPQ 1-9). Intentional.
+        // -Q MIN_BASE_QUAL: pre-filter bases before pileup; VarScan --min-base-qual
+        //     below is then redundant but left for explicit documentation of intent.
         let mut args = vec![
             "mpileup".to_string(),
             "-B".to_string(),
@@ -681,8 +687,6 @@ fn run_varscan_somatic(paths: &Paths) -> AppResult<()> {
             SOMATIC_P_VALUE.to_string(),
             "--strand-filter".to_string(),
             STRAND_FILTER.to_string(),
-            "--min-map-qual".to_string(),
-            BRC_MAP_QUAL.to_string(),
             "--min-base-qual".to_string(),
             MIN_BASE_QUAL.to_string(),
             "--output-vcf".to_string(),
@@ -822,8 +826,6 @@ fn run_varscan_copynumber(paths: &Paths) -> AppResult<()> {
             CNV_MIN_COVERAGE.to_string(),
             "--min-base-qual".to_string(),
             MIN_BASE_QUAL.to_string(),
-            "--min-map-qual".to_string(),
-            BRC_MAP_QUAL.to_string(),
             "--min-segment-size".to_string(),
             MIN_SEGMENT_SIZE.to_string(),
             "--max-segment-size".to_string(),

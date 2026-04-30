@@ -398,7 +398,7 @@ fn clean_pair_field(s: &str) -> String {
     s.chars().filter(|c| *c != ' ' && *c != '\r').collect()
 }
 
-fn read_pairs(cfg: &Config) -> AppResult<Vec<(String, String)>> {
+fn read_pairs(cfg: &Config) -> AppResult<Vec<(String, String, Option<f64>)>> {
     let file = File::open(&cfg.paths.pairs_file)
         .map_err(|e| format!("open {}: {}", cfg.paths.pairs_file, e))?;
     let reader = BufReader::new(file);
@@ -413,7 +413,14 @@ fn read_pairs(cfg: &Config) -> AppResult<Vec<(String, String)>> {
             log_message(&format!("WARNING: Incomplete pair (empty field) — skipping: '{}','{}'", p1, p2));
             continue;
         }
-        pairs.push((p1, p2));
+        let purity = parts.next()
+            .map(clean_pair_field)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse::<f64>().map_err(|_| {
+                format!("invalid tumor_purity '{}' for pair {},{} in {}", s, p1, p2, cfg.paths.pairs_file)
+            }))
+            .transpose()?;
+        pairs.push((p1, p2, purity));
     }
     Ok(pairs)
 }
@@ -564,7 +571,10 @@ fn hash_pairs_cleaned(cfg: &Config) -> AppResult<String> {
     }
     let normalized = pairs
         .iter()
-        .map(|(t, n)| format!("{},{}", t, n))
+        .map(|(t, n, p)| match p {
+            Some(v) => format!("{},{},{}", t, n, v),
+            None    => format!("{},{}", t, n),
+        })
         .collect::<Vec<_>>()
         .join("\n");
     sha256_of_string(&normalized)
@@ -581,7 +591,7 @@ fn hash_paired_bam_metadata(paths: &Paths, cfg: &Config) -> AppResult<String> {
     }
 
     let mut lines = Vec::new();
-    for (entry1, entry2) in pairs {
+    for (entry1, entry2, _) in pairs {
         let normal_bam = get_bam_path(paths, &entry2, cfg);
         let tumor_bam  = get_bam_path(paths, &entry1, cfg);
         for bam in [&normal_bam, &tumor_bam] {
@@ -822,7 +832,7 @@ fn generate_mpileup(paths: &Paths, cfg: &Config) -> AppResult<()> {
     let pairs = read_pairs(cfg)?;
     let mut children = Vec::new();
 
-    for (entry1, entry2) in pairs {
+    for (entry1, entry2, _) in pairs {
         let samplet = get_sample_name(&entry1, &cfg.paths.pairs_suffix);
         let samplen = get_sample_name(&entry2, &cfg.paths.pairs_suffix);
         let tumor_bam = get_bam_path(paths, &entry1, cfg);
@@ -875,7 +885,7 @@ fn run_varscan_somatic(paths: &Paths, cfg: &Config) -> AppResult<()> {
     let pairs = read_pairs(cfg)?;
     let mut children = Vec::new();
 
-    for (entry1, entry2) in pairs {
+    for (entry1, entry2, sample_purity) in pairs {
         let samplet = get_sample_name(&entry1, &cfg.paths.pairs_suffix);
         let samplen = get_sample_name(&entry2, &cfg.paths.pairs_suffix);
         let mpileup_file = paths.mpileup_dir.join(format!("{}_{}.mpileup", samplen, samplet));
@@ -884,7 +894,8 @@ fn run_varscan_somatic(paths: &Paths, cfg: &Config) -> AppResult<()> {
             continue;
         }
 
-        log_message(&format!("VarScan somatic: Normal={}  Tumour={}", samplen, samplet));
+        let effective_purity = sample_purity.unwrap_or(cfg.somatic.tumor_purity);
+        log_message(&format!("VarScan somatic: Normal={}  Tumour={}  tumor_purity={}", samplen, samplet, effective_purity));
         let mut args = vec![
             "-jar".to_string(),
             format!("{}/VarScan.v2.3.9.jar", cfg.paths.software_dir),
@@ -906,7 +917,7 @@ fn run_varscan_somatic(paths: &Paths, cfg: &Config) -> AppResult<()> {
             "--normal-purity".to_string(),
             cfg.somatic.normal_purity.to_string(),
             "--tumor-purity".to_string(),
-            cfg.somatic.tumor_purity.to_string(),
+            effective_purity.to_string(),
             "--p-value".to_string(),
             cfg.somatic.p_value.to_string(),
             "--somatic-p-value".to_string(),
@@ -1008,7 +1019,7 @@ fn run_varscan_copynumber(paths: &Paths, cfg: &Config) -> AppResult<()> {
     let pairs = read_pairs(cfg)?;
     let mut children = Vec::new();
 
-    for (entry1, entry2) in pairs {
+    for (entry1, entry2, _) in pairs {
         let samplet = get_sample_name(&entry1, &cfg.paths.pairs_suffix);
         let samplen = get_sample_name(&entry2, &cfg.paths.pairs_suffix);
 
@@ -1185,7 +1196,7 @@ fn run_bam_readcount(paths: &Paths, cfg: &Config) -> AppResult<()> {
     let pairs = read_pairs(cfg)?;
     let mut children = Vec::new();
 
-    for (entry1, entry2) in pairs {
+    for (entry1, entry2, _) in pairs {
         let samplet = get_sample_name(&entry1, &cfg.paths.pairs_suffix);
         let samplen = get_sample_name(&entry2, &cfg.paths.pairs_suffix);
         let tumor_bam = get_bam_path(paths, &entry1, cfg);
@@ -1888,6 +1899,57 @@ mod tests {
     fn get_sample_name_no_suffix_unchanged() {
         assert_eq!(get_sample_name("sample.bam", "_final.bam"), "sample.bam");
         assert_eq!(get_sample_name("sample", "_final.bam"), "sample");
+    }
+
+    // ── read_pairs — per-sample purity ──────────────────────────────────────
+
+    fn write_pairs_tempfile(content: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "varscan_pairs_test_{}.csv",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        path
+    }
+
+    #[test]
+    fn read_pairs_no_purity_column() {
+        let p = write_pairs_tempfile("t1_final.bam,n1_final.bam\nt2_final.bam,n2_final.bam\n");
+        let mut cfg = Config::default();
+        cfg.paths.pairs_file = p.to_string_lossy().to_string();
+        let pairs = read_pairs(&cfg).unwrap();
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0], ("t1_final.bam".to_string(), "n1_final.bam".to_string(), None));
+        assert_eq!(pairs[1], ("t2_final.bam".to_string(), "n2_final.bam".to_string(), None));
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn read_pairs_with_purity_column() {
+        let p = write_pairs_tempfile("t1_final.bam,n1_final.bam,0.65\nt2_final.bam,n2_final.bam\n");
+        let mut cfg = Config::default();
+        cfg.paths.pairs_file = p.to_string_lossy().to_string();
+        let pairs = read_pairs(&cfg).unwrap();
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].2, Some(0.65));
+        assert_eq!(pairs[1].2, None);
+        std::fs::remove_file(p).ok();
+    }
+
+    #[test]
+    fn read_pairs_invalid_purity_errors() {
+        let p = write_pairs_tempfile("t1_final.bam,n1_final.bam,notanumber\n");
+        let mut cfg = Config::default();
+        cfg.paths.pairs_file = p.to_string_lossy().to_string();
+        let result = read_pairs(&cfg);
+        std::fs::remove_file(p).ok();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid tumor_purity"));
     }
 
     // ── parse_primary_mapped_count ──────────────────────────────────────────

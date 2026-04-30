@@ -1,0 +1,12 @@
+services:
+  varscan:
+    image: ghcr.io/sandbox-commission/varscan2-pipeline:latest
+    volumes:
+      - ./bams:/data/bams
+      - ./ref:/data/ref
+      - ./config.toml:/workspace/config.toml:ro
+      - ./sample_pairs.csv:/workspace/sample_pairs.csv:ro
+      - ./results:/workspace
+    working_dir: /workspace
+    # Override the default CMD; pass extra flags after `docker compose run varscan`
+    command: ["--resume"]

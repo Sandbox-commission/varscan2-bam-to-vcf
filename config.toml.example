@@ -1,0 +1,50 @@
+# VarScan2 Pipeline — example configuration
+# Copy to config.toml and edit.  Run with:
+#   varscan2_pipeline --validate          # pre-flight check
+#   varscan2_pipeline --resume            # run (skip completed stages)
+#
+# Priority chain (highest wins): CLI --config > VARSCAN_* env vars > this file > compiled defaults
+
+[paths]
+reference    = ""            # REQUIRED: absolute path to indexed GRCh38 FASTA
+                             # e.g. "/data/ref/Homo_sapiens.GRCh38.dna.toplevel.fa"
+bam_dir      = "."           # directory containing BAM files (default: cwd)
+bam_suffix   = "_final.bam"  # BAM filename suffix; strip to get sample name
+pairs_file   = "sample_pairs.csv"
+pairs_suffix = "_final.bam"  # suffix stripped from pairs CSV entries
+target_bed   = ""            # WES: path to capture BED; leave empty for WGS
+software_dir = "software"    # contains VarScan.v2.3.9.jar
+scripts_dir  = "scripts"     # contains fpfilter.pl
+
+[somatic]
+min_coverage        = 20
+min_coverage_normal = 10
+min_coverage_tumor  = 20
+min_base_qual       = 20
+min_var_freq        = 0.10
+min_freq_for_hom    = 0.75
+normal_purity       = 1.0
+tumor_purity        = 1.0    # global fallback; override per-sample in pairs CSV column 3
+p_value             = 0.99
+somatic_p_value     = 0.05
+strand_filter       = 1
+
+[process_somatic]
+min_tumor_freq  = 0.10
+max_normal_freq = 0.05
+p_value         = 0.05
+
+[cnv]
+min_coverage     = 20
+p_value          = 0.01
+min_segment_size = 10
+max_segment_size = 100
+amp_threshold    = 0.25
+del_threshold    = 0.25
+recenter_up      = 0.0       # set to median log2 ratio if baseline is globally positive
+recenter_down    = 0.0       # set to |median log2 ratio| if baseline is globally negative
+
+[readcount]
+map_qual          = 10
+base_qual         = 15
+max_parallel_jobs = 30

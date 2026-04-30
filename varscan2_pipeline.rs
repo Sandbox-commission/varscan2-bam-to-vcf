@@ -294,6 +294,112 @@ struct Paths {
     summary_file: PathBuf,
 }
 
+fn validate_config(cfg: &Config) -> bool {
+    let mut ok = true;
+
+    macro_rules! check_ok {
+        ($cond:expr, $msg:expr) => {
+            if $cond { println!("[OK]   {}", $msg); }
+            else      { println!("[FAIL] {}", $msg); ok = false; }
+        };
+    }
+    macro_rules! warn {
+        ($msg:expr) => { println!("[WARN] {}", $msg); };
+    }
+
+    // reference
+    if cfg.paths.reference.is_empty() {
+        println!("[FAIL] reference: not set — add [paths] reference = \"...\" to config.toml");
+        ok = false;
+    } else {
+        let ref_path = Path::new(&cfg.paths.reference);
+        check_ok!(ref_path.is_file(), format!("reference: {} (file present)", cfg.paths.reference));
+        if ref_path.is_file() {
+            let fai = format!("{}.fai", cfg.paths.reference);
+            check_ok!(Path::new(&fai).is_file(), format!("reference index: {}", fai));
+        }
+    }
+
+    // pairs file
+    let pairs_ok = Path::new(&cfg.paths.pairs_file).is_file();
+    check_ok!(pairs_ok, format!("pairs file: {}", cfg.paths.pairs_file));
+    let pair_count = if pairs_ok {
+        match std::fs::File::open(&cfg.paths.pairs_file)
+            .map(std::io::BufReader::new)
+        {
+            Ok(r) => {
+                use std::io::BufRead;
+                let n = r.lines().filter(|l| {
+                    l.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false)
+                }).count();
+                println!("[OK]   pairs count: {} pair(s)", n);
+                n
+            }
+            Err(_) => 0,
+        }
+    } else { 0 };
+
+    // bam files from pairs CSV
+    if pairs_ok {
+        let cfg_clone = cfg.clone();
+        if let Ok(pairs) = read_pairs(&cfg_clone) {
+            for (entry1, entry2, _) in &pairs {
+                let bam_dir_pb = if cfg.paths.bam_dir.is_empty() || cfg.paths.bam_dir == "." {
+                    std::env::current_dir().unwrap_or_default()
+                } else {
+                    PathBuf::from(&cfg.paths.bam_dir)
+                };
+                let fake_paths = Paths {
+                    bam_dir: bam_dir_pb,
+                    resume_state_dir: PathBuf::new(),
+                    flagstat_dir: PathBuf::new(),
+                    mpileup_dir: PathBuf::new(),
+                    somatic_dir: PathBuf::new(),
+                    copy_number_dir: PathBuf::new(),
+                    snp_var_dir: PathBuf::new(),
+                    indel_var_dir: PathBuf::new(),
+                    readcount_dir: PathBuf::new(),
+                    filtered_dir: PathBuf::new(),
+                    summary_file: PathBuf::new(),
+                };
+                for entry in [entry1, entry2] {
+                    let bam = get_bam_path(&fake_paths, entry, cfg);
+                    if bam.is_file() {
+                        match check_bam_index(&bam) {
+                            Ok(_)  => println!("[OK]   {}: indexed", bam.display()),
+                            Err(e) => { println!("[FAIL] {}", e); ok = false; }
+                        }
+                    } else {
+                        println!("[FAIL] {}: not found", bam.display());
+                        ok = false;
+                    }
+                }
+            }
+        }
+    }
+
+    // tools on PATH
+    for cmd in ["samtools", "java", "bam-readcount", "perl"] {
+        check_ok!(check_command_exists(cmd).is_ok(), format!("{} on PATH", cmd));
+    }
+
+    // jars / scripts
+    let jar = format!("{}/VarScan.v2.3.9.jar", cfg.paths.software_dir);
+    check_ok!(Path::new(&jar).is_file(), format!("VarScan.v2.3.9.jar: {}", jar));
+    let fp = format!("{}/fpfilter.pl", cfg.paths.scripts_dir);
+    check_ok!(Path::new(&fp).is_file(), format!("fpfilter.pl: {}", fp));
+
+    // warnings
+    if cfg.paths.target_bed.is_empty() {
+        warn!("target_bed not set — full-genome mpileup (WGS mode)");
+    }
+    if cfg.somatic.tumor_purity == 1.0 && pair_count > 0 {
+        warn!("tumor_purity=1.0 (default) for all pairs — set col 3 in pairs CSV if purity is known");
+    }
+
+    ok
+}
+
 #[derive(Clone)]
 struct Args {
     from_stage:  u8,
@@ -1673,6 +1779,11 @@ fn run() -> AppResult<()> {
 
     let mut cfg = load_config(args.config_path.as_deref())?;
     apply_env_overrides(&mut cfg)?;
+
+    if args.validate {
+        let passed = validate_config(&cfg);
+        std::process::exit(if passed { 0 } else { 1 });
+    }
 
     let paths = build_paths(&cfg)?;
 

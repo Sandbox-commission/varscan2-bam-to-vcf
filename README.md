@@ -155,27 +155,26 @@ gunzip Homo_sapiens.GRCh38.dna.toplevel.fa.gz
 samtools faidx Homo_sapiens.GRCh38.dna.toplevel.fa
 ```
 
-Note the absolute path — you will need it in Step 4.
+Note the absolute path — you will set it in Step 4.
 
 > **UCSC users:** if your BAMs use `chr1, chr2, ..., chrM` naming, use the
 > UCSC reference (`hg38.fa`) instead. Mismatched naming causes silent empty
 > output at Stage 3 — verify with:
 > `samtools view -H case01_final.bam | grep '^@SQ' | head -3`
 
-### Step 4 — Set the reference FASTA path and build
+### Step 4 — Create `config.toml`
 
-Open `varscan2_pipeline.rs` in any text editor. On **line 11**, set
-`GENOMEIDX1` to the absolute path of your reference FASTA:
-
-```rust
-const GENOMEIDX1: &str = "/data/ref/Homo_sapiens.GRCh38.dna.toplevel.fa";
-```
-
-Then build the binary. **You must rebuild any time you change this constant:**
+Generate a commented template, then set your reference path:
 
 ```bash
-cargo build --release
-ls -lh target/release/varscan2_pipeline   # confirm binary exists
+./target/release/varscan2_pipeline --init-config > config.toml
+# Edit config.toml: set [paths] reference = "/data/ref/Homo_sapiens.GRCh38.dna.toplevel.fa"
+```
+
+No recompilation needed. Run `--validate` to check everything before starting:
+
+```bash
+./target/release/varscan2_pipeline --validate
 ```
 
 ### Step 5 — Obtain VarScan2 and fpfilter.pl
@@ -399,31 +398,24 @@ to the stage logic.
 
 ## Configuration
 
-> **Rust binary:** Parameters are compile-time constants at the top of
-> `varscan2_pipeline.rs`. Edit the constant, then rebuild with
-> `cargo build --release`. This ensures the binary and its configuration are
-> always in sync and avoids runtime config-file parsing errors.
->
-> **`GENOMEIDX1` is mandatory.** The binary will refuse to start with a clear
-> error message if it is left empty. Set it to the absolute path of your
-> indexed GRCh38 reference FASTA before building.
->
-> The legacy bash script (`varscan_pipeline.sh`) uses shell variables in its
-> `CONFIGURATION` section — the table below applies to both.
+> Parameters are loaded from `config.toml` at runtime. No recompilation required.
+> Generate a commented template with `varscan2_pipeline --init-config > config.toml`,
+> then set `reference` to your indexed GRCh38 FASTA and optionally set `bam_dir`.
+> The priority chain is: CLI flag `--config` > `VARSCAN_*` env vars > `config.toml` > built-in defaults.
 
-### Path settings
+### Path settings (`[paths]`)
 
-| Variable | Description |
-|----------|-------------|
-| `GENOMEIDX1` | Full path to the indexed reference FASTA (**must be set**) |
-| `SOFTWAREDIR` | Directory containing `VarScan.v2.3.9.jar` |
-| `SCRIPTSDIR` | Directory containing `fpfilter.pl` |
-| `BAM_DIR` | Directory containing all BAM files |
-| `BAM_SUFFIX` | Filename suffix of BAM files (e.g. `.bqsr.bam`, `_sm.bam`) |
-| `FILE_PAIRS_LIST` | Path to the tumour/normal pairs CSV |
-| `PAIRS_SUFFIX` | Extension to strip from pairs-file entries to get sample name |
-| `TARGET_BED` | **WES:** Path to capture kit BED file (e.g. Agilent SureSelect, Twist Exome). Passed as `-l` to `samtools mpileup` — restricts pileup to captured regions, reduces mpileup file sizes by ~95%, and naturally excludes alt contigs and decoy sequences. Leave empty for WGS. |
-| `VCF_SAMPLE_LIST` | Optional: plain-text file with sample names (normal first, tumour second, one per line). Provides correct column labels in VCF `##SAMPLE` headers instead of generic `NORMAL`/`TUMOR`. Leave empty to use VarScan defaults. |
+| Field | Description |
+|-------|-------------|
+| `reference` | Full path to the indexed reference FASTA (**required**) |
+| `software_dir` | Directory containing `VarScan.v2.3.9.jar` (default: `software`) |
+| `scripts_dir` | Directory containing `fpfilter.pl` (default: `scripts`) |
+| `bam_dir` | Directory containing all BAM files (default: `.`) |
+| `bam_suffix` | Filename suffix of BAM files (default: `_final.bam`) |
+| `pairs_file` | Path to the tumour/normal pairs CSV (default: `sample_pairs.csv`) |
+| `pairs_suffix` | Suffix to strip from pairs-file entries to get sample name |
+| `target_bed` | **WES:** Path to capture kit BED file. Restricts pileup to captured regions, reduces mpileup sizes ~95%, excludes alt contigs. Leave empty for WGS. |
+| `vcf_sample_list` | Optional two-line file (normal name, tumour name) for correct VCF `##SAMPLE` headers. Leave empty to use VarScan's generic `NORMAL`/`TUMOR`. |
 
 For detailed justification of every numeric parameter see the
 [Parameter Reference](#parameter-reference) section below.
@@ -861,8 +853,7 @@ baseline. Six decimal places reduces this quantisation error to a negligible
 ### `BRC_MAP_QUAL = 10`
 
 **What it does:** Minimum mapping quality for reads included in the bam-readcount
-allele counts. Also applied as `-q BRC_MAP_QUAL` in `samtools mpileup` (Stage 2)
-and as `--min-map-qual` in `VarScan somatic` and `VarScan copynumber`.
+allele counts. Also applied as `-q` in `samtools mpileup` (Stage 2).
 
 **Justification:** 10 is the threshold explicitly recommended in the **VarScan2
 FAQ**:
@@ -993,11 +984,11 @@ Print the built-in help and quick-reference:
 Run the full pipeline:
 
 ```bash
-# 1. Edit GENOMEIDX1 in varscan2_pipeline.rs, then: cargo build --release
-# 2. Place BAM files in the working directory
-# 3. Create sample_pairs.csv (tumour col 1, normal col 2)
+# 1. Generate config: ./target/release/varscan2_pipeline --init-config > config.toml
+# 2. Edit config.toml: set [paths] reference = "/path/to/GRCh38.fa"
+# 3. Place BAM files in bam_dir, create sample_pairs.csv
 # 4. Place VarScan.v2.3.9.jar in software/ and fpfilter.pl in scripts/
-./target/release/varscan2_pipeline
+./target/release/varscan2_pipeline --validate && ./target/release/varscan2_pipeline
 ```
 
 Run a single stage:
@@ -1105,11 +1096,11 @@ introduces a systematic offset in the CNV log-ratio baseline.
 
 ### Consistent quality filters across mpileup, VarScan, and bam-readcount
 
-`MIN_BASE_QUAL` (20) and `BRC_MAP_QUAL` (10) are applied uniformly via:
+`min_base_qual` (20) and `map_qual` (10) are applied uniformly via:
 - `samtools mpileup -Q 20 -q 10` — excludes bases/reads at the pileup level
-- `VarScan somatic --min-base-qual 20 --min-map-qual 10` — internal filter
-- `VarScan copynumber --min-base-qual 20 --min-map-qual 10` — internal filter
-- `bam-readcount -b 15 -q 10` — readcount filter (BRC_BASE_QUAL=15 per fpfilter docs)
+- `VarScan somatic --min-base-qual 20` — internal filter (pileup-mode input; `--min-map-qual` is not a valid flag in this mode)
+- `VarScan copynumber --min-base-qual 20` — internal filter (same reason)
+- `bam-readcount -b 15 -q 10` — readcount filter (`base_qual=15` per fpfilter docs)
 
 This ensures every stage operates on a consistent read set. Without this
 alignment, VarScan may report coverage figures that differ from IGV or other
@@ -1138,11 +1129,11 @@ name, then tumour sample name) propagates correct identifiers into the VCF
 `##SAMPLE` header and the genotype columns, preventing confusion when merging
 multi-sample VCFs or importing into annotation tools.
 
-### Flexible BAM / pairs-file naming via `PAIRS_SUFFIX` and `BAM_SUFFIX`
+### Flexible BAM / pairs-file naming via `pairs_suffix` and `bam_suffix`
 
-Sample names are derived by stripping `PAIRS_SUFFIX` from each pairs-file
-entry. BAM files are then located as `$BAM_DIR/<sample>${BAM_SUFFIX}`. Setting
-these two variables independently allows the same script to work with any
+Sample names are derived by stripping `pairs_suffix` from each pairs-file
+entry. BAM files are then located as `<bam_dir>/<sample><bam_suffix>`. Setting
+these two fields independently allows the pipeline to work with any
 combination of pairs-file format and BAM naming convention.
 
 ### Duplicate read exclusion via `-F 0x400` (Stage 2)

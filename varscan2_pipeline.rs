@@ -412,13 +412,8 @@ struct Args {
 }
 
 fn now_string() -> String {
-    let output = Command::new("date")
-        .arg("+%Y-%m-%d %H:%M:%S")
-        .output();
-    match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => "unknown-time".to_string(),
-    }
+    use chrono::Local;
+    Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 fn log_message(msg: &str) {
@@ -501,7 +496,7 @@ fn check_bam_index(bam: &Path) -> AppResult<()> {
 }
 
 fn clean_pair_field(s: &str) -> String {
-    s.chars().filter(|c| *c != ' ' && *c != '\r').collect()
+    s.chars().filter(|c| *c != ' ' && *c != '\t' && *c != '\r').collect()
 }
 
 fn read_pairs(cfg: &Config) -> AppResult<Vec<(String, String, Option<f64>)>> {
@@ -532,41 +527,37 @@ fn read_pairs(cfg: &Config) -> AppResult<Vec<(String, String, Option<f64>)>> {
 }
 
 fn glob_match(pattern: &str, name: &str) -> bool {
-    if pattern == "*" {
-        return true;
+    if pattern == "*" { return true; }
+    if !pattern.contains('*') { return pattern == name; }
+    // Fast path: *suffix (all common *.ext patterns)
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        if !suffix.contains('*') { return name.ends_with(suffix); }
     }
-    if !pattern.contains('*') {
-        return pattern == name;
+    // General: split on *, consume non-empty segments in order.
+    // When pattern has a non-wildcard prefix, consume it as an anchor first.
+    let starts_star = pattern.starts_with('*');
+    let ends_star   = pattern.ends_with('*');
+    let parts: Vec<&str> = pattern.split('*').filter(|s| !s.is_empty()).collect();
+    let mut iter = parts.iter().copied();
+    let mut rest = name;
+    if !starts_star {
+        let first = iter.next().unwrap();
+        if !rest.starts_with(first) { return false; }
+        rest = &rest[first.len()..];
     }
-    let parts: Vec<&str> = pattern.split('*').collect();
-    let mut idx = 0usize;
-    let starts_with_star = pattern.starts_with('*');
-    let ends_with_star = pattern.ends_with('*');
-
-    for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            continue;
-        }
-        if i == 0 && !starts_with_star {
-            if !name[idx..].starts_with(part) {
-                return false;
-            }
-            idx += part.len();
-            continue;
-        }
-        if i == parts.len() - 1 && !ends_with_star {
-            if !name.ends_with(part) {
-                return false;
-            }
-            continue;
-        }
-        if let Some(pos) = name[idx..].find(part) {
-            idx += pos + part.len();
-        } else {
-            return false;
+    let remaining: Vec<&str> = iter.collect();
+    let (middle, last) = if ends_star || remaining.is_empty() {
+        (&remaining[..], None)
+    } else {
+        (&remaining[..remaining.len() - 1], remaining.last())
+    };
+    for seg in middle {
+        match rest.find(seg) {
+            Some(pos) => rest = &rest[pos + seg.len()..],
+            None => return false,
         }
     }
-    true
+    last.map_or(true, |s| rest.ends_with(s))
 }
 
 fn list_files_matching(dir: &Path, pattern: &str) -> AppResult<Vec<PathBuf>> {
@@ -858,18 +849,25 @@ fn spawn_command(program: &str, args: &[String], stdout_file: Option<&Path>) -> 
 }
 
 fn wait_all(children: &mut Vec<Child>) -> AppResult<()> {
-    let mut failed = false;
-    for child in children.iter_mut() {
-        let status = child.wait().map_err(|e| format!("wait failed: {}", e))?;
-        if !status.success() {
-            failed = true;
+    let mut first_err: Option<String> = None;
+    let mut i = 0;
+    while i < children.len() {
+        let status = children[i].wait().map_err(|e| format!("wait failed: {}", e))?;
+        if !status.success() && first_err.is_none() {
+            first_err = Some(format!("subprocess failed with {}", status));
+            // kill any children we haven't waited on yet, then stop polling
+            for j in (i + 1)..children.len() {
+                let _ = children[j].kill();
+                let _ = children[j].wait();
+            }
+            break;
         }
+        i += 1;
     }
     children.clear();
-    if failed {
-        Err("one or more subprocesses failed".to_string())
-    } else {
-        Ok(())
+    match first_err {
+        Some(e) => Err(e),
+        None => Ok(()),
     }
 }
 
@@ -1001,6 +999,9 @@ fn run_varscan_somatic(paths: &Paths, cfg: &Config) -> AppResult<()> {
         }
 
         let effective_purity = sample_purity.unwrap_or(cfg.somatic.tumor_purity);
+        if effective_purity == 1.0 {
+            log_message(&format!("WARN: tumor_purity=1.0 for {} — if purity < 1.0, set col 3 in pairs CSV", samplet));
+        }
         log_message(&format!("VarScan somatic: Normal={}  Tumour={}  tumor_purity={}", samplen, samplet, effective_purity));
         let mut args = vec![
             "-jar".to_string(),
@@ -1818,6 +1819,9 @@ fn run() -> AppResult<()> {
     run_stage(3, "VarScan somatic",      &args, &paths, &cfg, || run_varscan_somatic(&paths, &cfg))?;
     run_stage(4, "VarScan processSomatic", &args, &paths, &cfg, || process_somatic_variants(&paths, &cfg))?;
 
+    // Guard: stages 7-9 require processSomatic .hc.vcf output (stage 4).
+    // This runs whether stage 4 executed in this invocation or was skipped
+    // (e.g. --from 7 resuming into a prior run's output).
     if args.to_stage >= 7 && !args.dry_run {
         check_stage4_output(&paths)?;
     }
@@ -1846,6 +1850,8 @@ fn main() {
 mod tests {
     use super::*;
     use std::io::Write as IoWrite;
+    // Env var tests mutate global process state — serialize them to avoid parallel races.
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     // ── config_example_toml ──────────────────────────────────────────────────
 
@@ -1862,6 +1868,7 @@ mod tests {
 
     #[test]
     fn env_override_reference() {
+        let _g = ENV_MUTEX.lock().unwrap();
         std::env::set_var("VARSCAN_REFERENCE", "/env/ref.fa");
         let mut cfg = Config::default();
         apply_env_overrides(&mut cfg).unwrap();
@@ -1871,7 +1878,7 @@ mod tests {
 
     #[test]
     fn env_override_min_coverage_parses_int() {
-        // uses a distinct var from env_override_invalid_int_errors to avoid parallel conflict
+        let _g = ENV_MUTEX.lock().unwrap();
         std::env::set_var("VARSCAN_MIN_BASE_QUAL", "25");
         let mut cfg = Config::default();
         apply_env_overrides(&mut cfg).unwrap();
@@ -1881,6 +1888,7 @@ mod tests {
 
     #[test]
     fn env_override_invalid_int_errors() {
+        let _g = ENV_MUTEX.lock().unwrap();
         std::env::set_var("VARSCAN_MIN_SEGMENT_SIZE", "notanint");
         let mut cfg = Config::default();
         let result = apply_env_overrides(&mut cfg);
@@ -1890,6 +1898,7 @@ mod tests {
 
     #[test]
     fn env_override_tumor_purity_parses_float() {
+        let _g = ENV_MUTEX.lock().unwrap();
         std::env::set_var("VARSCAN_TUMOR_PURITY", "0.65");
         let mut cfg = Config::default();
         apply_env_overrides(&mut cfg).unwrap();
@@ -1940,6 +1949,14 @@ mod tests {
         assert_eq!(cfg.readcount.max_parallel_jobs, 30);
         assert_eq!(cfg.paths.bam_suffix, "_final.bam");
         assert_eq!(cfg.paths.pairs_file, "sample_pairs.csv");
+    }
+
+    // ── clean_pair_field ────────────────────────────────────────────────────
+
+    #[test]
+    fn clean_pair_strips_tab() {
+        assert_eq!(clean_pair_field("\tsample.bam\t"), "sample.bam");
+        assert_eq!(clean_pair_field("s\ta\tm"), "sam");
     }
 
     // ── glob_match ──────────────────────────────────────────────────────────

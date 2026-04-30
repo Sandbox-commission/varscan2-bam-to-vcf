@@ -1,4 +1,5 @@
 use sha2::{Digest, Sha256};
+use serde::Deserialize;
 use std::env;
 use std::ffi::OsStr;
 use std::fs::{self, File};
@@ -6,6 +7,148 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::UNIX_EPOCH;
+
+// ── Config structs ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct PathsConfig {
+    pub reference:       String,
+    pub bam_dir:         String,
+    pub bam_suffix:      String,
+    pub pairs_file:      String,
+    pub pairs_suffix:    String,
+    pub target_bed:      String,
+    pub vcf_sample_list: String,
+    pub software_dir:    String,
+    pub scripts_dir:     String,
+}
+
+impl Default for PathsConfig {
+    fn default() -> Self {
+        Self {
+            reference:       String::new(),
+            bam_dir:         ".".to_string(),
+            bam_suffix:      "_final.bam".to_string(),
+            pairs_file:      "sample_pairs.csv".to_string(),
+            pairs_suffix:    "_final.bam".to_string(),
+            target_bed:      String::new(),
+            vcf_sample_list: String::new(),
+            software_dir:    "software".to_string(),
+            scripts_dir:     "scripts".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct SomaticConfig {
+    pub min_coverage:        i32,
+    pub min_coverage_normal: i32,
+    pub min_coverage_tumor:  i32,
+    pub min_base_qual:       i32,
+    pub min_var_freq:        f64,
+    pub min_freq_for_hom:    f64,
+    pub normal_purity:       f64,
+    pub tumor_purity:        f64,
+    pub p_value:             f64,
+    pub somatic_p_value:     f64,
+    pub strand_filter:       i32,
+}
+
+impl Default for SomaticConfig {
+    fn default() -> Self {
+        Self {
+            min_coverage:        20,
+            min_coverage_normal: 10,
+            min_coverage_tumor:  20,
+            min_base_qual:       20,
+            min_var_freq:        0.10,
+            min_freq_for_hom:    0.75,
+            normal_purity:       1.0,
+            tumor_purity:        1.0,
+            p_value:             0.99,
+            somatic_p_value:     0.05,
+            strand_filter:       1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ProcessSomaticConfig {
+    pub min_tumor_freq:  f64,
+    pub max_normal_freq: f64,
+    pub p_value:         f64,
+}
+
+impl Default for ProcessSomaticConfig {
+    fn default() -> Self {
+        Self {
+            min_tumor_freq:  0.10,
+            max_normal_freq: 0.05,
+            p_value:         0.05,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct CnvConfig {
+    pub min_coverage:     i32,
+    pub p_value:          f64,
+    pub min_segment_size: i32,
+    pub max_segment_size: i32,
+    pub amp_threshold:    f64,
+    pub del_threshold:    f64,
+    pub recenter_up:      f64,
+    pub recenter_down:    f64,
+}
+
+impl Default for CnvConfig {
+    fn default() -> Self {
+        Self {
+            min_coverage:     20,
+            p_value:          0.01,
+            min_segment_size: 10,
+            max_segment_size: 100,
+            amp_threshold:    0.25,
+            del_threshold:    0.25,
+            recenter_up:      0.0,
+            recenter_down:    0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ReadcountConfig {
+    pub map_qual:          i32,
+    pub base_qual:         i32,
+    pub max_parallel_jobs: usize,
+}
+
+impl Default for ReadcountConfig {
+    fn default() -> Self {
+        Self {
+            map_qual:          10,
+            base_qual:         15,
+            max_parallel_jobs: 30,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Config {
+    pub paths:           PathsConfig,
+    pub somatic:         SomaticConfig,
+    pub process_somatic: ProcessSomaticConfig,
+    pub cnv:             CnvConfig,
+    pub readcount:       ReadcountConfig,
+}
+
+// ── Legacy compile-time constants (kept until Task 5 threads Config through all stages) ──
 
 // GENOMEIDX1: the only path you must set — absolute path to your GRCh38 reference FASTA.
 // All other tools are bundled under software/ and scripts/ in the repository root.
@@ -1469,6 +1612,22 @@ fn main() {
 mod tests {
     use super::*;
     use std::io::Write as IoWrite;
+
+    // ── Config defaults ─────────────────────────────────────────────────────
+
+    #[test]
+    fn config_defaults_match_original_consts() {
+        let cfg = Config::default();
+        assert_eq!(cfg.somatic.min_coverage, 20);
+        assert_eq!(cfg.somatic.min_base_qual, 20);
+        assert!((cfg.somatic.min_var_freq - 0.10).abs() < 1e-9);
+        assert!((cfg.cnv.p_value - 0.01).abs() < 1e-9);
+        assert_eq!(cfg.readcount.map_qual, 10);
+        assert_eq!(cfg.readcount.base_qual, 15);
+        assert_eq!(cfg.readcount.max_parallel_jobs, 30);
+        assert_eq!(cfg.paths.bam_suffix, "_final.bam");
+        assert_eq!(cfg.paths.pairs_file, "sample_pairs.csv");
+    }
 
     // ── glob_match ──────────────────────────────────────────────────────────
 

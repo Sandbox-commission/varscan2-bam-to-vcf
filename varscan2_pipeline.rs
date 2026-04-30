@@ -195,6 +195,20 @@ const MAX_PARALLEL_JOBS: usize = 30;
 
 type AppResult<T> = Result<T, String>;
 
+fn load_config(path: Option<&str>) -> AppResult<Config> {
+    let toml_path = path.unwrap_or("config.toml");
+    if !std::path::Path::new(toml_path).is_file() {
+        if path.is_some() {
+            return Err(format!("Config file not found: {}", toml_path));
+        }
+        return Ok(Config::default());
+    }
+    let content = fs::read_to_string(toml_path)
+        .map_err(|e| format!("read config {}: {}", toml_path, e))?;
+    toml::from_str::<Config>(&content)
+        .map_err(|e| format!("parse config {}: {}", toml_path, e))
+}
+
 #[derive(Clone)]
 struct Paths {
     bam_dir: PathBuf,
@@ -212,10 +226,13 @@ struct Paths {
 
 #[derive(Clone)]
 struct Args {
-    from_stage: u8,
-    to_stage: u8,
-    resume: bool,
-    dry_run: bool,
+    from_stage:  u8,
+    to_stage:    u8,
+    resume:      bool,
+    dry_run:     bool,
+    config_path: Option<String>,
+    init_config: bool,
+    validate:    bool,
 }
 
 fn now_string() -> String {
@@ -1352,10 +1369,13 @@ where
 }
 
 fn parse_args() -> AppResult<Args> {
-    let mut from_stage: u8 = 1;
-    let mut to_stage: u8 = 10;
-    let mut resume = false;
-    let mut dry_run = false;
+    let mut from_stage:  u8 = 1;
+    let mut to_stage:    u8 = 10;
+    let mut resume       = false;
+    let mut dry_run      = false;
+    let mut config_path: Option<String> = None;
+    let mut init_config  = false;
+    let mut validate     = false;
 
     let mut it = env::args().skip(1).peekable();
     while let Some(arg) = it.next() {
@@ -1507,7 +1527,13 @@ See README.md for full parameter justifications and troubleshooting."#
                 let v = it.next().ok_or_else(|| "--to requires a value (1-10)".to_string())?;
                 to_stage = v.parse::<u8>().map_err(|_| "--to requires an integer".to_string())?;
             }
-            "--resume" => resume = true,
+            "--config" => {
+                let v = it.next().ok_or_else(|| "--config requires a path".to_string())?;
+                config_path = Some(v);
+            }
+            "--init-config" => init_config = true,
+            "--validate"    => validate = true,
+            "--resume"  => resume = true,
             "--dry-run" => dry_run = true,
             _ => return Err(format!("Unknown argument: {}", arg)),
         }
@@ -1525,6 +1551,9 @@ See README.md for full parameter justifications and troubleshooting."#
         to_stage,
         resume,
         dry_run,
+        config_path,
+        init_config,
+        validate,
     })
 }
 
@@ -1612,6 +1641,35 @@ fn main() {
 mod tests {
     use super::*;
     use std::io::Write as IoWrite;
+
+    // ── load_config ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn load_config_from_toml_overrides_defaults() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("varscan_test_config.toml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "[somatic]\nmin_coverage = 30").unwrap();
+        writeln!(f, "[paths]\nreference = \"/data/ref.fa\"").unwrap();
+        let cfg = load_config(Some(path.to_str().unwrap())).unwrap();
+        assert_eq!(cfg.somatic.min_coverage, 30);
+        assert_eq!(cfg.paths.reference, "/data/ref.fa");
+        assert_eq!(cfg.somatic.min_base_qual, 20); // non-overridden stays default
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn load_config_no_file_returns_defaults() {
+        let cfg = load_config(None).unwrap();
+        assert_eq!(cfg.somatic.min_coverage, 20);
+    }
+
+    #[test]
+    fn load_config_missing_explicit_file_errors() {
+        let result = load_config(Some("/tmp/nonexistent_varscan_xyzzy.toml"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
+    }
 
     // ── Config defaults ─────────────────────────────────────────────────────
 

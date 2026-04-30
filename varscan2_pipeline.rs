@@ -209,6 +209,68 @@ fn load_config(path: Option<&str>) -> AppResult<Config> {
         .map_err(|e| format!("parse config {}: {}", toml_path, e))
 }
 
+fn apply_env_overrides(cfg: &mut Config) -> AppResult<()> {
+    macro_rules! env_str {
+        ($var:expr, $field:expr) => {
+            if let Ok(v) = std::env::var($var) { $field = v; }
+        };
+    }
+    macro_rules! env_int {
+        ($var:expr, $field:expr) => {
+            if let Ok(v) = std::env::var($var) {
+                $field = v.parse().map_err(|_| {
+                    format!("{} must be an integer, got: {}", $var, v)
+                })?;
+            }
+        };
+    }
+    macro_rules! env_float {
+        ($var:expr, $field:expr) => {
+            if let Ok(v) = std::env::var($var) {
+                $field = v.parse().map_err(|_| {
+                    format!("{} must be a float, got: {}", $var, v)
+                })?;
+            }
+        };
+    }
+
+    env_str!  ("VARSCAN_REFERENCE",           cfg.paths.reference);
+    env_str!  ("VARSCAN_BAM_DIR",             cfg.paths.bam_dir);
+    env_str!  ("VARSCAN_BAM_SUFFIX",          cfg.paths.bam_suffix);
+    env_str!  ("VARSCAN_PAIRS_FILE",          cfg.paths.pairs_file);
+    env_str!  ("VARSCAN_PAIRS_SUFFIX",        cfg.paths.pairs_suffix);
+    env_str!  ("VARSCAN_TARGET_BED",          cfg.paths.target_bed);
+    env_str!  ("VARSCAN_VCF_SAMPLE_LIST",     cfg.paths.vcf_sample_list);
+    env_str!  ("VARSCAN_SOFTWARE_DIR",        cfg.paths.software_dir);
+    env_str!  ("VARSCAN_SCRIPTS_DIR",         cfg.paths.scripts_dir);
+    env_int!  ("VARSCAN_MIN_COVERAGE",        cfg.somatic.min_coverage);
+    env_int!  ("VARSCAN_MIN_COVERAGE_NORMAL", cfg.somatic.min_coverage_normal);
+    env_int!  ("VARSCAN_MIN_COVERAGE_TUMOR",  cfg.somatic.min_coverage_tumor);
+    env_int!  ("VARSCAN_MIN_BASE_QUAL",       cfg.somatic.min_base_qual);
+    env_float!("VARSCAN_MIN_VAR_FREQ",        cfg.somatic.min_var_freq);
+    env_float!("VARSCAN_MIN_FREQ_FOR_HOM",    cfg.somatic.min_freq_for_hom);
+    env_float!("VARSCAN_NORMAL_PURITY",       cfg.somatic.normal_purity);
+    env_float!("VARSCAN_TUMOR_PURITY",        cfg.somatic.tumor_purity);
+    env_float!("VARSCAN_P_VALUE",             cfg.somatic.p_value);
+    env_float!("VARSCAN_SOMATIC_P_VALUE",     cfg.somatic.somatic_p_value);
+    env_int!  ("VARSCAN_STRAND_FILTER",       cfg.somatic.strand_filter);
+    env_float!("VARSCAN_MIN_TUMOR_FREQ",      cfg.process_somatic.min_tumor_freq);
+    env_float!("VARSCAN_MAX_NORMAL_FREQ",     cfg.process_somatic.max_normal_freq);
+    env_float!("VARSCAN_PROCESS_P_VALUE",     cfg.process_somatic.p_value);
+    env_int!  ("VARSCAN_CNV_MIN_COVERAGE",    cfg.cnv.min_coverage);
+    env_float!("VARSCAN_CNV_P_VALUE",         cfg.cnv.p_value);
+    env_int!  ("VARSCAN_MIN_SEGMENT_SIZE",    cfg.cnv.min_segment_size);
+    env_int!  ("VARSCAN_MAX_SEGMENT_SIZE",    cfg.cnv.max_segment_size);
+    env_float!("VARSCAN_CNV_AMP_THRESHOLD",   cfg.cnv.amp_threshold);
+    env_float!("VARSCAN_CNV_DEL_THRESHOLD",   cfg.cnv.del_threshold);
+    env_float!("VARSCAN_CNV_RECENTER_UP",     cfg.cnv.recenter_up);
+    env_float!("VARSCAN_CNV_RECENTER_DOWN",   cfg.cnv.recenter_down);
+    env_int!  ("VARSCAN_BRC_MAP_QUAL",        cfg.readcount.map_qual);
+    env_int!  ("VARSCAN_BRC_BASE_QUAL",       cfg.readcount.base_qual);
+
+    Ok(())
+}
+
 #[derive(Clone)]
 struct Paths {
     bam_dir: PathBuf,
@@ -1641,6 +1703,45 @@ fn main() {
 mod tests {
     use super::*;
     use std::io::Write as IoWrite;
+
+    // ── apply_env_overrides ──────────────────────────────────────────────────
+
+    #[test]
+    fn env_override_reference() {
+        std::env::set_var("VARSCAN_REFERENCE", "/env/ref.fa");
+        let mut cfg = Config::default();
+        apply_env_overrides(&mut cfg).unwrap();
+        assert_eq!(cfg.paths.reference, "/env/ref.fa");
+        std::env::remove_var("VARSCAN_REFERENCE");
+    }
+
+    #[test]
+    fn env_override_min_coverage_parses_int() {
+        // uses a distinct var from env_override_invalid_int_errors to avoid parallel conflict
+        std::env::set_var("VARSCAN_MIN_BASE_QUAL", "25");
+        let mut cfg = Config::default();
+        apply_env_overrides(&mut cfg).unwrap();
+        assert_eq!(cfg.somatic.min_base_qual, 25);
+        std::env::remove_var("VARSCAN_MIN_BASE_QUAL");
+    }
+
+    #[test]
+    fn env_override_invalid_int_errors() {
+        std::env::set_var("VARSCAN_MIN_SEGMENT_SIZE", "notanint");
+        let mut cfg = Config::default();
+        let result = apply_env_overrides(&mut cfg);
+        std::env::remove_var("VARSCAN_MIN_SEGMENT_SIZE");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn env_override_tumor_purity_parses_float() {
+        std::env::set_var("VARSCAN_TUMOR_PURITY", "0.65");
+        let mut cfg = Config::default();
+        apply_env_overrides(&mut cfg).unwrap();
+        assert!((cfg.somatic.tumor_purity - 0.65).abs() < 1e-9);
+        std::env::remove_var("VARSCAN_TUMOR_PURITY");
+    }
 
     // ── load_config ─────────────────────────────────────────────────────────
 

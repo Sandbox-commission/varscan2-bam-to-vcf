@@ -11,7 +11,8 @@ exome sequencing (WES) with full WGS compatibility.
 
 - [Overview](#overview)
 - [Pipeline Stages](#pipeline-stages)
-- [Setup Guide](#setup-guide)
+- [Quick Start (Docker)](#quick-start-docker)
+- [Setup Guide (native)](#setup-guide)
 - [Prerequisites](#prerequisites)
 - [Directory Structure](#directory-structure)
 - [Input File Format](#input-file-format)
@@ -92,9 +93,97 @@ BAM files
 
 ---
 
-## Setup Guide
+## Quick Start (Docker)
 
-Complete setup from a fresh clone to a working binary. Follow steps in order.
+The Docker image bundles every dependency (samtools, bam-readcount, VarScan2
+jar, fpfilter.pl, Java, Perl). No manual installation required.
+
+**Requirements:** Docker ≥ 20 (or Apptainer/Singularity for HPC), a sorted
+indexed BAM pair, and a GRCh38 reference FASTA.
+
+### Step 1 — Generate config
+
+```bash
+docker run --rm ghcr.io/sandbox-commission/varscan2-pipeline:latest --init-config \
+  > config.toml
+```
+
+### Step 2 — Edit `config.toml`
+
+Set at minimum:
+
+```toml
+[paths]
+reference = "/data/ref/Homo_sapiens.GRCh38.dna.toplevel.fa"
+bam_dir   = "/data/bams"
+```
+
+Adjust `bam_suffix` / `pairs_suffix` if your BAMs do not use the `_final.bam`
+naming convention.
+
+### Step 3 — Create `sample_pairs.csv`
+
+```
+case01_final.bam,control01_final.bam
+case02_final.bam,control02_final.bam
+```
+
+Optional column 3: per-sample tumour purity (0.0–1.0), e.g.:
+
+```
+case01_final.bam,control01_final.bam,0.72
+```
+
+### Step 4 — Validate and run
+
+Using **docker compose** (recommended — mounts are pre-configured in
+`docker-compose.yml`):
+
+```bash
+# Edit docker-compose.yml: set BAM and REF volume source paths
+docker compose run varscan --validate
+docker compose run varscan --resume
+```
+
+Or manually with bind-mounts:
+
+```bash
+docker run --rm \
+  -v /data/bams:/data/bams \
+  -v /data/ref:/data/ref \
+  -v "$(pwd)":/workspace \
+  -w /workspace \
+  ghcr.io/sandbox-commission/varscan2-pipeline:latest \
+  --validate
+
+docker run --rm \
+  -v /data/bams:/data/bams \
+  -v /data/ref:/data/ref \
+  -v "$(pwd)":/workspace \
+  -w /workspace \
+  ghcr.io/sandbox-commission/varscan2-pipeline:latest \
+  --resume
+```
+
+### Apptainer / HPC
+
+```bash
+# Pull once
+apptainer pull varscan2.sif \
+  docker://ghcr.io/sandbox-commission/varscan2-pipeline:latest
+
+# Submit SLURM job (edit SIF/BAM_DIR/REF_DIR env vars first)
+sbatch run_slurm.sh
+```
+
+See `run_slurm.sh` for `#SBATCH` resource defaults (8 CPUs, 32 GB, 48 h).
+
+---
+
+## Setup Guide (native)
+
+Complete native setup from a fresh clone. **Skip this section if using Docker.**
+Follow steps in order.
 
 ### Step 1 — Install system dependencies
 
@@ -256,14 +345,12 @@ See [Usage](#usage) for stage-range and resume options.
 
 | Tool | Minimum version | Notes |
 |------|----------------|-------|
-| bash | 4.0 | Requires `(( ))` arithmetic and `[[ ]]` conditionals |
 | Java JRE | 8 | Required to run VarScan2 .jar |
-| VarScan2 | 2.3.9 | `VarScan.v2.3.9.jar` placed in `$SOFTWAREDIR` |
+| VarScan2 | 2.3.9 | `VarScan.v2.3.9.jar` in `software_dir` (config `[paths]`) |
 | samtools | 1.13 | Must be on `$PATH` |
 | bam-readcount | 0.8 | Must be on `$PATH` |
 | Perl | 5.10 | Required for fpfilter.pl |
-| fpfilter.pl | — | VarScan2 companion script; place in `$SCRIPTSDIR` |
-| bc | any | Floating-point data-ratio calculation |
+| fpfilter.pl | — | VarScan2 companion script; place in `scripts_dir` (config `[paths]`) |
 
 All BAM files must be:
 - **Coordinate-sorted** — required by samtools mpileup and bam-readcount
@@ -327,8 +414,8 @@ Java JRE 8+ is required for VarScan (see Prerequisites table above).
 
 ```
 <working_directory>/
-|-- varscan_pipeline.sh        # this script
-|-- sample_pairs.csv           # pairs file (tumour col 1, normal col 2)
+|-- config.toml                # runtime configuration (--init-config > config.toml)
+|-- sample_pairs.csv           # pairs file (tumour col 1, normal col 2, opt col 3: purity)
 |
 |-- flagstats/                 # samtools flagstat outputs
 |-- mpileup/                   # paired .mpileup files
@@ -338,6 +425,7 @@ Java JRE 8+ is required for VarScan (see Prerequisites table above).
 |-- indel-VAR/                 # INDEL position lists (.var) for bam-readcount
 |-- readcount/                 # bam-readcount outputs
 |-- filtered/                  # fpfilter.pl output VCFs
+|-- .resume_state/             # SHA256 stage markers for --resume
 |-- varscan_pipeline_summary.txt
 ```
 
@@ -353,46 +441,51 @@ Column 1 is the **tumour** identifier; column 2 is the **normal** identifier.
 > by column position in the mpileup (normal must be first in the mpileup call,
 > which is determined by which entry is treated as normal here).
 
-The sample name is derived by stripping `PAIRS_SUFFIX` from each identifier.
-The BAM file is then located as `$BAM_DIR/<sample_name>$BAM_SUFFIX`.
+The sample name is derived by stripping `pairs_suffix` (config `[paths]`) from
+each identifier. The BAM file is located as
+`<bam_dir>/<sample_name><bam_suffix>`.
 
 **Incomplete pairs** (empty normal field) are automatically skipped with a
 warning. Verify all pairs before running; do not omit unpaired tumour-only samples.
 
-### Example A — typical `sample_pairs.csv`
+### Example A — default naming (`_final.bam`)
 
 ```
 case01_final.bam,control01_final.bam
-case02_final.bam,control02_final.bam
+case02_final.bam,control02_final.bam,0.68
 ```
 
-```bash
-FILE_PAIRS_LIST="sample_pairs.csv"
-PAIRS_SUFFIX="_final.bam"
-BAM_SUFFIX="_final.bam"
-BAM_DIR="$PWD"
+`config.toml` (defaults — no change needed):
+
+```toml
+[paths]
+pairs_suffix = "_final.bam"
+bam_suffix   = "_final.bam"
+bam_dir      = "."
 ```
 
-> Samples with no matched control are skipped automatically with a WARNING message.
+Optional column 3 is the per-sample tumour purity (0.0–1.0). When present it
+overrides `[somatic] tumor_purity` for that pair.
 
-### Example B — pairs file lists flagstat filenames; BAMs are in a subdirectory
+> Rows with an empty normal field are skipped automatically with a WARNING.
+
+### Example B — pairs file uses a different suffix; BAMs are in a subdirectory
 
 ```
-# file_pairs.txt  (tumour first, normal second)
-tumour1.flagstats,normal1.flagstats
-tumour2.flagstats,normal2.flagstats
+tumour1.bam,normal1.bam
+tumour2.bam,normal2.bam
 ```
 
-```bash
-FILE_PAIRS_LIST="file_pairs.txt"
-PAIRS_SUFFIX=".flagstats"
-BAM_SUFFIX="_sm.bam"
-BAM_DIR="$PWD/sm-bam"
+```toml
+[paths]
+pairs_file   = "file_pairs.csv"
+pairs_suffix = ".bam"
+bam_suffix   = ".bam"
+bam_dir      = "/data/bams"
 ```
 
-The two suffix variables decouple the pairs file format from the BAM naming
-convention, so the same script handles any combination without modification
-to the stage logic.
+`pairs_suffix` and `bam_suffix` are independent, so the pairs file can use any
+naming convention regardless of the actual BAM filename pattern.
 
 ---
 

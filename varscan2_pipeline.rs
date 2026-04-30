@@ -1567,9 +1567,13 @@ fn parse_args() -> AppResult<Args> {
     let mut it = env::args().skip(1).peekable();
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "--version" => {
+                println!("varscan2_pipeline {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             "-h" | "--help" => {
                 println!(
-                    r#"Usage: varscan2_pipeline [--help] [--stage N] [--from N --to N] [--resume] [--dry-run]
+                    r#"varscan2_pipeline {}
 
 VarScan2 paired tumour/normal somatic variant and CNV analysis pipeline.
 Runs 10 sequential stages from BAM flagstats through false-positive filtering.
@@ -1586,46 +1590,43 @@ PIPELINE STAGES
   Stage 9   fpfilter.pl              False positive removal (.fpfilter.vcf)
   Stage 10  Summary report           varscan_pipeline_summary.txt
 
-QUICK START
-  1. Edit GENOMEIDX1 at the top of varscan2_pipeline.rs to point to your GRCh38
-     reference FASTA, then rebuild: cargo build --release
-  2. Populate sample_pairs.csv (tumour col 1, normal col 2):
-       case01_final.bam,control01_final.bam
-  3. Place VarScan.v2.3.9.jar in software/ and fpfilter.pl in scripts/
-     (see software/README.md and scripts/README.md)
-  4. Run: ./target/release/varscan2_pipeline
+QUICK START (native)
+  1. varscan2_pipeline --init-config > config.toml
+  2. Edit config.toml: set [paths] reference = "/path/to/GRCh38.fa"
+  3. Populate sample_pairs.csv (tumour col 1, normal col 2; optional col 3: purity)
+  4. varscan2_pipeline --validate && varscan2_pipeline --resume
 
-REQUIRED CONFIGURATION (compile-time constants in varscan2_pipeline.rs)
-  GENOMEIDX1        Indexed reference FASTA (must match BAM chromosome naming)
-  SOFTWAREDIR       Directory containing VarScan.v2.3.9.jar  (default: software)
-  SCRIPTSDIR        Directory containing fpfilter.pl          (default: scripts)
-  BAM_SUFFIX        BAM filename suffix                       (default: _final.bam)
-  FILE_PAIRS_LIST   Tumour/normal pairs CSV                   (default: sample_pairs.csv)
+QUICK START (Docker)
+  docker run --rm ghcr.io/sandbox-commission/varscan2-pipeline --init-config > config.toml
+  # edit config.toml
+  docker compose run varscan --validate
+  docker compose run varscan --resume
 
-OPTIONAL CONFIGURATION
-  TARGET_BED        Capture kit BED file (WES only).
-                    When set: restricts mpileup to captured regions, reduces
-                    file size ~95%, excludes alt/decoy contigs automatically.
-                    Leave empty for WGS.
-  VCF_SAMPLE_LIST   Plain-text file with sample names (normal first, tumour
-                    second, one per line) for correct VCF column labels.
-                    Leave empty to use VarScan generic NORMAL/TUMOR headers.
+QUICK START (Apptainer / HPC)
+  apptainer pull varscan2.sif docker://ghcr.io/sandbox-commission/varscan2-pipeline:latest
+  sbatch run_slurm.sh
 
-KEY PARAMETERS (defaults shown — edit constants in varscan2_pipeline.rs)
-  MIN_COVERAGE=20           Minimum site depth (both samples)
-  MIN_COVERAGE_NORMAL=10    Minimum depth in normal
-  MIN_COVERAGE_TUMOR=20     Minimum depth in tumour
-  MIN_BASE_QUAL=20          Minimum base quality (mpileup + VarScan)
-  MIN_VAR_FREQ=0.10         Minimum variant allele frequency to call
-  TUMOR_PURITY=1.0          Tumour purity estimate — SET TO ACTUAL VALUE
-                            VarScan uses this in its somatic Fisher's test.
-                            Leaving at 1.0 for an impure tumour will
-                            under-call subclonal variants.
-  SOMATIC_P_VALUE=0.05      Significance threshold for somatic classification
-  CNV_AMP_THRESHOLD=0.25    log2 ratio threshold for amplification call
-  CNV_DEL_THRESHOLD=0.25    log2 ratio threshold for deletion call
-  CNV_RECENTER_UP/DOWN=0    Baseline correction for chromosomally unstable
-                            tumours — inspect *.copynumber before setting
+CONFIGURATION
+  Parameters are loaded from config.toml (or --config <path>) at runtime.
+  Priority: CLI flag > VARSCAN_* env var > config.toml > compiled defaults.
+
+  Key [paths] fields:
+    reference       Indexed GRCh38 FASTA (required)
+    bam_dir         Directory containing BAM files  (default: .)
+    bam_suffix      BAM filename suffix             (default: _final.bam)
+    pairs_file      Tumour/normal pairs CSV         (default: sample_pairs.csv)
+    target_bed      WES capture BED (leave empty for WGS)
+    software_dir    Contains VarScan.v2.3.9.jar     (default: software)
+    scripts_dir     Contains fpfilter.pl            (default: scripts)
+
+  Key [somatic] fields (defaults):
+    tumor_purity=1.0   Set per-sample in pairs CSV col 3 if purity is known
+    somatic_p_value=0.05
+    min_var_freq=0.10
+
+  Key [cnv] fields:
+    amp_threshold=0.25   del_threshold=0.25
+    recenter_up=0.0      recenter_down=0.0  (set after inspecting *.copynumber)
 
 PREREQUISITES
   Tool              Min version   Notes
@@ -1696,7 +1697,8 @@ POST-PIPELINE STEPS
   3. Annotate filtered VCFs with VEP or ANNOVAR.
   4. Validate high-impact somatic mutations.
 
-See README.md for full parameter justifications and troubleshooting."#
+See README.md for full parameter justifications and troubleshooting."#,
+                    env!("CARGO_PKG_VERSION")
                 );
                 std::process::exit(0);
             }
